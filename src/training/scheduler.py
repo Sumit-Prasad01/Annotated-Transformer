@@ -17,7 +17,7 @@ def rate(step: int, model_size: int, factor: float, warmup: int) -> float:
 
 
 def get_std_opt(model: torch.nn.Module, d_model: int = 512, factor: float = 1.0, 
-                warmup: int = 4000, lr: float = 0.0) -> tuple:
+                warmup: int = 4000, lr: float = 1.0) -> tuple:
     """
     Construct standard Adam optimizer with LambdaLR learning rate scheduler.
     """
