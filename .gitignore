@@ -142,5 +142,4 @@ Processed_Data.csv
 
 mlruns/
 
-mlflow*
-artifacts/
+modular_implementation_plan.md

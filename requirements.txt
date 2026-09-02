@@ -1,5 +1,12 @@
-numpy 
+torch>=2.0.0
+numpy
 pandas
 matplotlib
 seaborn
-mlflow==3.14.0 
+altair
+spacy
+datasets
+pyyaml
+gputil
+tqdm
+mlflow==3.14.0
