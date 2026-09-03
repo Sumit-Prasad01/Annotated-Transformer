@@ -1,4 +1,5 @@
 import time
+import math
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
@@ -139,8 +140,17 @@ def train_model(
                     mode="eval",
                     device=device,
                 )
-            
-            logger.info(f"Epoch {epoch + 1} Complete -> Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+
+            val_loss = float(val_loss)
+            try:
+                val_perplexity = math.exp(val_loss)
+            except OverflowError:
+                val_perplexity = float("inf")
+
+            logger.info(
+                f"Epoch {epoch + 1} Complete -> Train Loss: {train_loss:.4f} | "
+                f"Val Loss: {val_loss:.4f} | Val Perplexity (PPL): {val_perplexity:.4f}"
+            )
 
             # Log metrics to MLflow if active
             if use_mlflow:
@@ -149,7 +159,8 @@ def train_model(
                     if mlflow.active_run():
                         current_lr = optimizer.param_groups[0]["lr"]
                         mlflow.log_metric("train_loss", float(train_loss), step=epoch + 1)
-                        mlflow.log_metric("val_loss", float(val_loss), step=epoch + 1)
+                        mlflow.log_metric("val_loss", val_loss, step=epoch + 1)
+                        mlflow.log_metric("val_perplexity", val_perplexity, step=epoch + 1)
                         mlflow.log_metric("learning_rate", float(current_lr), step=epoch + 1)
                 except Exception as ml_err:
                     logger.warning(f"Could not log metrics to MLflow: {ml_err}")

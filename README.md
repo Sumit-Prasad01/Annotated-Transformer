@@ -1,6 +1,6 @@
 # 🤖 The Annotated Transformer — Modular PyTorch Implementation
 
-A modular, production-grade PyTorch implementation of **The Annotated Transformer** based on the seminal paper [*Attention Is All You Need* (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762). Refactored from the Harvard NLP annotated notebook into an extensible, config-driven Python package structure with custom utilities, gradient accumulation, GPU VRAM optimization, and **MLflow Experiment Tracking**.
+A modular, production-grade PyTorch implementation of **The Annotated Transformer** based on the seminal paper [*Attention Is All You Need* (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762). Refactored from the Harvard NLP annotated notebook into an extensible, config-driven Python package structure with custom utilities, gradient accumulation, GPU VRAM optimization, **Perplexity & BLEU Score Evaluation**, and **MLflow Experiment Tracking**.
 
 ---
 
@@ -99,6 +99,24 @@ Regularization technique distributing confidence $\epsilon$ across non-target vo
 
 $$q(y \mid x) = \begin{cases} 1 - \epsilon + \frac{\epsilon}{K}, & \text{if } y = \text{target} \\ \frac{\epsilon}{K}, & \text{if } y \neq \text{target} \end{cases}$$
 
+### 2.8 Perplexity (PPL)
+Measures how well the model predicts target word sequences (lower is better):
+
+$$\text{PPL} = \exp(\mathcal{L}) = e^{\mathcal{L}}$$
+
+*where $\mathcal{L}$ is the cross-entropy / label smoothing loss per target token.*
+
+### 2.9 BLEU Score (Bilingual Evaluation Understudy)
+Evaluates machine translation quality against human reference translations:
+
+$$\text{BLEU} = \text{BP} \cdot \exp\left( \sum_{n=1}^N w_n \log p_n \right)$$
+
+$$\text{where } \text{BP} = \begin{cases} 1 & \text{if } c > r \\ e^{(1 - r/c)} & \text{if } c \le r \end{cases}$$
+
+- $p_n$: Clipped $n$-gram precision
+- $w_n = \frac{1}{N}$: Uniform weight (typically $N=4$)
+- $\text{BP}$: Brevity Penalty ($c$ = candidate hypothesis length, $r$ = reference length)
+
 ---
 
 ## ⚡ 3. Hardware & VRAM Optimization for RTX 3050 (4GB VRAM)
@@ -119,19 +137,20 @@ Training Transformer models can quickly exceed GPU VRAM limits. This project inc
 ### Key Optimization Strategies Applied
 1. **Micro-Batching (`batch_size=16`)**: Reduces peak activation tensor memory from `2.1 GB` to `0.9 GB`.
 2. **Gradient Accumulation (`accum_iter=20`)**: Accumulates gradients across 20 micro-batches before executing optimizer step:
-   $$\text{Effective Batch Size} = \text{batch\_size} \times \text{accum\_iter} = 16 \times 20 = 320$$
+   $$\text{Effective Batch Size} = \text{batch size} \times \text{accum iter} = 16 \times 20 = 320$$
    *This maintains the exact same optimization stability as the original paper while running in < 2.5 GB VRAM.*
 3. **Causal & Padding Masking**: Memory-efficient lower triangular causal masks (`subsequent_mask`) generated dynamically per batch.
 
 ---
 
-## 📊 4. MLflow Experiment Tracking
+## 📊 4. MLflow Experiment Tracking & Metric Logging
 
-Integrated experiment tracking via **MLflow** automatically records parameters, loss metrics, learning rate schedules, and model artifacts per training run using an SQLite database backend (`sqlite:///mlflow.db`).
+Integrated experiment tracking via **MLflow** automatically records parameters, loss metrics, perplexity, BLEU scores, learning rate schedules, and model artifacts per training run using an SQLite database backend (`sqlite:///mlflow.db`).
 
 ### Tracked Metrics & Parameters
 - **Hyperparameters (`mlflow.log_params`)**: `num_epochs`, `batch_size`, `accum_iter`, `base_lr`, `warmup`, `d_model`, `d_ff`, `num_layers`, `num_heads`, `dropout`, `label_smoothing`, `src_vocab_size`, `tgt_vocab_size`, `total_parameters`, `device`, `seed`.
-- **Per-Epoch Metrics (`mlflow.log_metric`)**: `train_loss`, `val_loss`, `learning_rate` per epoch.
+- **Per-Epoch Metrics (`mlflow.log_metric`)**: `train_loss`, `val_loss`, `val_perplexity`, `learning_rate` per epoch.
+- **Evaluation Metrics**: `eval_val_loss`, `eval_perplexity`, `eval_bleu_score`.
 - **Artifacts (`mlflow.log_artifact`)**: Saved model checkpoints (`.pt`), vocabulary dictionary (`vocab.pt`), and run config file (`config.yaml`).
 
 ### Viewing MLflow Dashboard
@@ -171,9 +190,13 @@ Annotated-Transformer/
 │   │   ├── loss.py                 # LabelSmoothing loss & SimpleLossCompute
 │   │   ├── scheduler.py            # Noam LR rate schedule & get_std_opt wrapper
 │   │   └── trainer.py              # TrainState, run_epoch & train_model loop with MLflow
-│   ├── inference/                  # Generation & Translation Pipeline
+│   ├── inference/                  # Generation & Decoding Algorithms
 │   │   ├── __init__.py
-│   │   └── generator.py            # greedy_decode autoregressive search & Translator
+│   │   └── generator.py            # greedy_decode, beam_search_decode & Translator
+│   ├── evaluation/                 # Metrics & Model Evaluator Engine
+│   │   ├── __init__.py
+│   │   ├── metrics.py              # calculate_perplexity & calculate_bleu (SacreBLEU/NLTK/Fallback)
+│   │   └── evaluator.py            # evaluate_model driver for loss, PPL & BLEU
 │   └── visualization/              # Diagnostic Heatmaps
 │       ├── __init__.py
 │       └── attention_viz.py        # Altair attention map DataFrames & visualizations
@@ -183,8 +206,8 @@ Annotated-Transformer/
 │   ├── helper.py                   # YAML reader & file utilities
 │   └── logger.py                   # Centralized logging module
 ├── train.py                        # Training pipeline entry point (MLflow enabled)
-├── evaluate.py                     # Validation evaluation entry point
-├── predict.py                      # Translation CLI entry point
+├── evaluate.py                     # Validation evaluation entry point (Loss, PPL, BLEU)
+├── predict.py                      # Translation CLI entry point (Greedy / Beam Search)
 ├── modular_implementation_plan.md  # Refactoring blueprint document
 ├── requirements.txt                # Package dependencies
 └── setup.py                        # Package installation manifest
@@ -210,41 +233,64 @@ python -m spacy download en_core_web_sm
 ```
 
 ### 6.2 Model Training
-Run end-to-end model training with MLflow tracking:
+Run end-to-end model training with automatic device detection and MLflow tracking:
 ```bash
 python train.py --config config/config.yaml
 ```
 
 *Training logs are stored in `logs/`, MLflow runs in `mlflow.db`, and best model checkpoints are saved to `outputs/multi30k_model_best.pt`.*
 
-### 6.3 Model Evaluation
-Evaluate validation loss on the Multi30k test set:
+### 6.3 Model Evaluation (Loss, Perplexity & BLEU Score)
+Evaluate validation loss, perplexity, and BLEU score on the Multi30k test dataset:
+
 ```bash
+# Evaluate with Greedy Decoding (Default)
 python evaluate.py --config config/config.yaml
+
+# Evaluate with Beam Search Decoding (Beam Width = 8)
+python evaluate.py --config config/config.yaml --beam --beam_size 8
+
+# Evaluate BLEU on a subset of 100 validation samples (Faster)
+python evaluate.py --config config/config.yaml --max_samples 100
+```
+
+#### Benchmark Evaluation Results:
+
+##### 1. Beam Search Decoding (`beam_size=8`)
+```text
+==================================================
+         MODEL EVALUATION RESULTS         
+==================================================
+  Validation Loss : 1.4330
+  Perplexity (PPL): 4.1912
+  BLEU Score      : 39.58
+  Decoding Strategy: beam (beam_size=8)
+==================================================
+```
+
+##### 2. Greedy Search Decoding
+```text
+==================================================
+         MODEL EVALUATION RESULTS         
+==================================================
+  Validation Loss : 1.4330
+  Perplexity (PPL): 4.1912
+  BLEU Score      : 38.45
+  Decoding Strategy: greedy
+==================================================
 ```
 
 ### 6.4 Run Translation Inference (German $\to$ English)
 Translate German sentences from the command line:
-```bash
-python predict.py --text "Eine Frau kocht ein Gericht in der Küche."
-```
-
-By default, this uses **greedy decoding**. You can also choose the decoding strategy explicitly:
 
 ```bash
-# Greedy decoding (fast, default)
+# Greedy decoding (Fast, Default)
 python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --greedy
 
-# Beam search decoding (slower, often more fluent output)
-python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --beam
-
-# Beam search with a custom beam width (default is 5)
+# Beam search decoding (Higher quality output)
 python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --beam --beam_size 8
-```
 
-You can also point to a specific config or checkpoint:
-
-```bash
+# Specify custom checkpoint and config
 python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --config config/config.yaml --checkpoint outputs/multi30k_model_best.pt --beam
 ```
 
@@ -253,9 +299,9 @@ python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --config c
 ## ⚙️ 7. Configuration Reference (`config/config.yaml`)
 
 ```yaml
-# Training schedule
+# Training schedule (Optimized for 4GB VRAM GPU e.g., RTX 3050)
 num_epochs: 8
-batch_size: 16            # Optimized for 4GB VRAM GPUs (e.g. RTX 3050)
+batch_size: 16            # Micro-batch size to fit in VRAM
 accum_iter: 20            # Effective batch size = 16 * 20 = 320
 base_lr: 1.0
 warmup: 3000
@@ -277,10 +323,20 @@ language_pair: ["de", "en"]
 output_dir: outputs
 checkpoint_prefix: multi30k_model_
 vocab_path: outputs/vocab.pt
+dashboard_path: outputs/dashboard.html
+metrics_path: outputs/metrics.json
 
 # Runtime
 device: auto              # Automatically uses CUDA GPU if available
+distributed: false
 seed: 42
+
+# Evaluation & Metrics (Loss, Perplexity, BLEU Score)
+eval_every_epoch: true
+max_decode_len: 72
+eval_decoding: greedy     # Decoding strategy for BLEU evaluation: "greedy" or "beam"
+eval_beam_size: 5         # Beam search width when eval_decoding is "beam"
+eval_max_samples: null    # Max samples for BLEU score evaluation (null evaluates full val set)
 
 # MLflow Experiment Tracking
 mlflow:

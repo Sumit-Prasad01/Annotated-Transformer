@@ -10,3 +10,5 @@ pyyaml
 gputil
 tqdm
 mlflow==3.14.0
+nltk
+sacrebleu

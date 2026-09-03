@@ -30,9 +30,12 @@ device: auto
 distributed: false
 seed: 42
 
-# Evaluation
+# Evaluation & Metrics (Loss, Perplexity, BLEU Score)
 eval_every_epoch: true
 max_decode_len: 72
+eval_decoding: greedy     # Decoding strategy for BLEU evaluation: "greedy" or "beam"
+eval_beam_size: 5         # Beam search width when eval_decoding is "beam"
+eval_max_samples: null    # Max samples for BLEU score evaluation (null evaluates full val set)
 
 # MLflow Experiment Tracking
 mlflow:
