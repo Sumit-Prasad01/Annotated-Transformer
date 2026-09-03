@@ -33,3 +33,10 @@ seed: 42
 # Evaluation
 eval_every_epoch: true
 max_decode_len: 72
+
+# MLflow Experiment Tracking
+mlflow:
+  enabled: true
+  experiment_name: "Annotated_Transformer_Multi30k"
+  tracking_uri: "sqlite:///mlflow.db"
+  log_artifacts: true

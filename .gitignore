@@ -144,3 +144,4 @@ mlruns/
 
 modular_implementation_plan.md
 outputs/
+mlflow*

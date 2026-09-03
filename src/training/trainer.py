@@ -101,9 +101,10 @@ def train_model(
     accum_iter: int = 10,
     save_path: str = "outputs/model.pt",
     device: torch.device = None,
+    use_mlflow: bool = True,
 ) -> nn.Module:
     """
-    Main single-GPU / CPU model training orchestration loop.
+    Main single-GPU / CPU model training orchestration loop with MLflow metric logging.
     """
     try:
         if device is not None:
@@ -140,6 +141,18 @@ def train_model(
                 )
             
             logger.info(f"Epoch {epoch + 1} Complete -> Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+
+            # Log metrics to MLflow if active
+            if use_mlflow:
+                try:
+                    import mlflow
+                    if mlflow.active_run():
+                        current_lr = optimizer.param_groups[0]["lr"]
+                        mlflow.log_metric("train_loss", float(train_loss), step=epoch + 1)
+                        mlflow.log_metric("val_loss", float(val_loss), step=epoch + 1)
+                        mlflow.log_metric("learning_rate", float(current_lr), step=epoch + 1)
+                except Exception as ml_err:
+                    logger.warning(f"Could not log metrics to MLflow: {ml_err}")
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss

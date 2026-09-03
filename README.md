@@ -1,6 +1,6 @@
 # 🤖 The Annotated Transformer — Modular PyTorch Implementation
 
-A modular, production-grade PyTorch implementation of **The Annotated Transformer** based on the seminal paper [*Attention Is All You Need* (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762). Refactored from the Harvard NLP annotated notebook into an extensible, config-driven Python package structure with custom utilities, gradient accumulation, and GPU VRAM optimization.
+A modular, production-grade PyTorch implementation of **The Annotated Transformer** based on the seminal paper [*Attention Is All You Need* (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762). Refactored from the Harvard NLP annotated notebook into an extensible, config-driven Python package structure with custom utilities, gradient accumulation, GPU VRAM optimization, and **MLflow Experiment Tracking**.
 
 ---
 
@@ -125,12 +125,30 @@ Training Transformer models can quickly exceed GPU VRAM limits. This project inc
 
 ---
 
-## 📂 4. Project Directory Structure
+## 📊 4. MLflow Experiment Tracking
+
+Integrated experiment tracking via **MLflow** automatically records parameters, loss metrics, learning rate schedules, and model artifacts per training run using an SQLite database backend (`sqlite:///mlflow.db`).
+
+### Tracked Metrics & Parameters
+- **Hyperparameters (`mlflow.log_params`)**: `num_epochs`, `batch_size`, `accum_iter`, `base_lr`, `warmup`, `d_model`, `d_ff`, `num_layers`, `num_heads`, `dropout`, `label_smoothing`, `src_vocab_size`, `tgt_vocab_size`, `total_parameters`, `device`, `seed`.
+- **Per-Epoch Metrics (`mlflow.log_metric`)**: `train_loss`, `val_loss`, `learning_rate` per epoch.
+- **Artifacts (`mlflow.log_artifact`)**: Saved model checkpoints (`.pt`), vocabulary dictionary (`vocab.pt`), and run config file (`config.yaml`).
+
+### Viewing MLflow Dashboard
+Launch the local MLflow web UI server to inspect runs, metric curves, and parameter comparisons:
+```bash
+mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+*Open your browser and navigate to `http://127.0.0.1:5000` to view interactive experiment dashboards.*
+
+---
+
+## 📂 5. Project Directory Structure
 
 ```
 Annotated-Transformer/
 ├── config/
-│   └── config.yaml                 # Central hyperparameter & environment configuration
+│   └── config.yaml                 # Central hyperparameter & MLflow configuration
 ├── notebooks/
 │   └── AnnotatedTransformer.ipynb  # Original reference research notebook
 ├── src/
@@ -152,7 +170,7 @@ Annotated-Transformer/
 │   │   ├── __init__.py
 │   │   ├── loss.py                 # LabelSmoothing loss & SimpleLossCompute
 │   │   ├── scheduler.py            # Noam LR rate schedule & get_std_opt wrapper
-│   │   └── trainer.py              # TrainState, run_epoch & train_model loop
+│   │   └── trainer.py              # TrainState, run_epoch & train_model loop with MLflow
 │   ├── inference/                  # Generation & Translation Pipeline
 │   │   ├── __init__.py
 │   │   └── generator.py            # greedy_decode autoregressive search & Translator
@@ -164,7 +182,7 @@ Annotated-Transformer/
 │   ├── custom_exception.py         # Detailed traceback exception handler
 │   ├── helper.py                   # YAML reader & file utilities
 │   └── logger.py                   # Centralized logging module
-├── train.py                        # Training pipeline entry point
+├── train.py                        # Training pipeline entry point (MLflow enabled)
 ├── evaluate.py                     # Validation evaluation entry point
 ├── predict.py                      # Translation CLI entry point
 ├── modular_implementation_plan.md  # Refactoring blueprint document
@@ -174,9 +192,9 @@ Annotated-Transformer/
 
 ---
 
-## 🚀 5. Quickstart & Usage
+## 🚀 6. Quickstart & Usage
 
-### 5.1 Environment Setup
+### 6.1 Environment Setup
 Clone the repository and install requirements:
 ```bash
 git clone https://github.com/Sumit-Prasad01/Annotated-Transformer.git
@@ -191,21 +209,21 @@ python -m spacy download de_core_news_sm
 python -m spacy download en_core_web_sm
 ```
 
-### 5.2 Model Training
-Run end-to-end model training using `config/config.yaml`:
+### 6.2 Model Training
+Run end-to-end model training with MLflow tracking:
 ```bash
 python train.py --config config/config.yaml
 ```
 
-*Training logs are stored in `logs/` and best model checkpoints are saved to `outputs/multi30k_model_best.pt`.*
+*Training logs are stored in `logs/`, MLflow runs in `mlflow.db`, and best model checkpoints are saved to `outputs/multi30k_model_best.pt`.*
 
-### 5.3 Model Evaluation
+### 6.3 Model Evaluation
 Evaluate validation loss on the Multi30k test set:
 ```bash
 python evaluate.py --config config/config.yaml
 ```
 
-### 5.4 Run Translation Inference (German $\to$ English)
+### 6.4 Run Translation Inference (German $\to$ English)
 Translate German sentences from the command line:
 ```bash
 python predict.py --text "Eine Frau kocht ein Gericht in der Küche."
@@ -213,7 +231,7 @@ python predict.py --text "Eine Frau kocht ein Gericht in der Küche."
 
 ---
 
-## ⚙️ 6. Configuration Reference (`config/config.yaml`)
+## ⚙️ 7. Configuration Reference (`config/config.yaml`)
 
 ```yaml
 # Training schedule
@@ -244,11 +262,18 @@ vocab_path: outputs/vocab.pt
 # Runtime
 device: auto              # Automatically uses CUDA GPU if available
 seed: 42
+
+# MLflow Experiment Tracking
+mlflow:
+  enabled: true
+  experiment_name: "Annotated_Transformer_Multi30k"
+  tracking_uri: "sqlite:///mlflow.db"
+  log_artifacts: true
 ```
 
 ---
 
-## 📜 7. Citation & Acknowledgments
+## 📜 8. Citation & Acknowledgments
 
 - **Original Paper**: Vaswani et al., *"Attention Is All You Need"*, NeurIPS 2017. [arXiv:1706.03762](https://arxiv.org/abs/1706.03762)
-- **Harvard NLP**: Sasha Rush et al., *The Annotated Transformer*, [Harvard NLP Blog](https://nlp.seas.harvard.edu/annotated-transformer/).
+- **Harvard NLP**: Sasha Rush et al., *The Annotated Transformer*, [Harvard NLP Blog](https://nlp.seas.harvard.edu/2018/04/03/attention.html).
