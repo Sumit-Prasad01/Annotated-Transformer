@@ -9,7 +9,8 @@ from src.models import make_model
 from src.inference import Translator
 
 
-def predict(text: str, config_path: str = "config/config.yaml", checkpoint_path: str = None):
+def predict(text: str, config_path: str = "config/config.yaml", checkpoint_path: str = None,
+            decoding: str = "greedy", beam_size: int = 5):
     try:
         config = read_yaml(config_path)
         output_dir = config.get("output_dir", "outputs")
@@ -46,10 +47,13 @@ def predict(text: str, config_path: str = "config/config.yaml", checkpoint_path:
             vocab_src=vocab_src,
             vocab_tgt=vocab_tgt,
             max_len=config.get("max_decode_len", 72),
+            decoding=decoding,
+            beam_size=beam_size,
         )
 
         translation = translator.translate(text)
         print(f"\nSource (DE): {text}")
+        print(f"Decoding strategy: {decoding}" + (f" (beam_size={beam_size})" if decoding == "beam" else ""))
         print(f"Translation (EN): {translation}\n")
         return translation
 
@@ -63,5 +67,15 @@ if __name__ == "__main__":
     parser.add_argument("--text", type=str, required=True, help="Input German sentence to translate")
     parser.add_argument("--config", type=str, default="config/config.yaml", help="Path to config.yaml")
     parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint")
+
+    decode_group = parser.add_mutually_exclusive_group()
+    decode_group.add_argument("--greedy", action="store_true", help="Use greedy decoding (default)")
+    decode_group.add_argument("--beam", action="store_true", help="Use beam search decoding")
+
+    parser.add_argument("--beam_size", type=int, default=5, help="Beam width when using --beam (default: 5)")
+
     args = parser.parse_args()
-    predict(args.text, args.config, args.checkpoint)
+
+    decoding = "beam" if args.beam else "greedy"
+
+    predict(args.text, args.config, args.checkpoint, decoding=decoding, beam_size=args.beam_size)

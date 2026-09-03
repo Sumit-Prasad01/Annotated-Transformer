@@ -229,6 +229,25 @@ Translate German sentences from the command line:
 python predict.py --text "Eine Frau kocht ein Gericht in der Küche."
 ```
 
+By default, this uses **greedy decoding**. You can also choose the decoding strategy explicitly:
+
+```bash
+# Greedy decoding (fast, default)
+python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --greedy
+
+# Beam search decoding (slower, often more fluent output)
+python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --beam
+
+# Beam search with a custom beam width (default is 5)
+python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --beam --beam_size 8
+```
+
+You can also point to a specific config or checkpoint:
+
+```bash
+python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --config config/config.yaml --checkpoint outputs/multi30k_model_best.pt --beam
+```
+
 ---
 
 ## ⚙️ 7. Configuration Reference (`config/config.yaml`)
