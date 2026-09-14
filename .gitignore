@@ -145,3 +145,5 @@ mlruns/
 modular_implementation_plan.md
 outputs/
 mlflow*
+scratch_byte_level_bpe_plan.md
+logs/

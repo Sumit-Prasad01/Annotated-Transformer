@@ -3,6 +3,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.nn.functional import pad
 from datasets import load_dataset
 from src.data.batch import Batch
+from src.data.bpe_tokenizer import ByteLevelBPETokenizer
 from src.data.tokenizer import load_tokenizers, tokenize
 from src.data.vocab import Vocab
 from utils.logger import logger
@@ -45,19 +46,26 @@ class Multi30kDataset(Dataset):
         return {"de": item["de"], "en": item["en"]}
 
 
-def collate_fn(batch, vocab_src: Vocab, vocab_tgt: Vocab, spacy_de, spacy_en, 
+def collate_fn(batch, tokenizer_src=None, tokenizer_tgt=None, 
+               vocab_src: Vocab = None, vocab_tgt: Vocab = None,
                max_padding: int = 72, pad_id: int = 1) -> Batch:
     """
     Collate function to process raw text samples into padded Tensor Batches.
+    Leverages ByteLevelBPETokenizer for fast subword encoding.
     """
     try:
-        bs_id = vocab_tgt["<s>"]
-        eos_id = vocab_tgt["</s>"]
-
         src_list, tgt_list = [], []
         for sample in batch:
-            src_tokens = [vocab_src["<s>"]] + [vocab_src[token] for token in tokenize(sample["de"], spacy_de)] + [vocab_src["</s>"]]
-            tgt_tokens = [bs_id] + [vocab_tgt[token] for token in tokenize(sample["en"], spacy_en)] + [eos_id]
+            if isinstance(tokenizer_src, ByteLevelBPETokenizer) and isinstance(tokenizer_tgt, ByteLevelBPETokenizer):
+                src_tokens = tokenizer_src.encode(sample["de"], add_special_tokens=True)
+                tgt_tokens = tokenizer_tgt.encode(sample["en"], add_special_tokens=True)
+            elif tokenizer_src is not None and tokenizer_tgt is not None and hasattr(tokenizer_src, "encode"):
+                src_tokens = tokenizer_src.encode(sample["de"], add_special_tokens=True)
+                tgt_tokens = tokenizer_tgt.encode(sample["en"], add_special_tokens=True)
+            else:
+                # Fallback to word-level tokenize + vocab mapping
+                src_tokens = [vocab_src["<s>"]] + [vocab_src[tok] for tok in tokenize(sample["de"], tokenizer_src)] + [vocab_src["</s>"]]
+                tgt_tokens = [vocab_tgt["<s>"]] + [vocab_tgt[tok] for tok in tokenize(sample["en"], tokenizer_tgt)] + [vocab_tgt["</s>"]]
 
             src_list.append(torch.tensor(src_tokens, dtype=torch.long))
             tgt_list.append(torch.tensor(tgt_tokens, dtype=torch.long))
@@ -66,8 +74,8 @@ def collate_fn(batch, vocab_src: Vocab, vocab_tgt: Vocab, spacy_de, spacy_en,
         padded_src = []
         padded_tgt = []
         for src_tensor, tgt_tensor in zip(src_list, tgt_list):
-            src_padded = pad(src_tensor, (0, max_padding - len(src_tensor)), value=pad_id)[:max_padding]
-            tgt_padded = pad(tgt_tensor, (0, max_padding - len(tgt_tensor)), value=pad_id)[:max_padding]
+            src_padded = pad(src_tensor, (0, max(0, max_padding - len(src_tensor))), value=pad_id)[:max_padding]
+            tgt_padded = pad(tgt_tensor, (0, max(0, max_padding - len(tgt_tensor))), value=pad_id)[:max_padding]
             padded_src.append(src_padded)
             padded_tgt.append(tgt_padded)
 
@@ -80,18 +88,35 @@ def collate_fn(batch, vocab_src: Vocab, vocab_tgt: Vocab, spacy_de, spacy_en,
         raise CustomException("Failed in collate_fn processing batch", e)
 
 
-def create_dataloaders(vocab_src: Vocab, vocab_tgt: Vocab, batch_size: int = 32, 
+def create_dataloaders(vocab_src: Vocab = None, vocab_tgt: Vocab = None, 
+                       tokenizer_src: ByteLevelBPETokenizer = None,
+                       tokenizer_tgt: ByteLevelBPETokenizer = None,
+                       batch_size: int = 32, 
                        max_padding: int = 72, pad_id: int = 1):
     """
-    Create PyTorch DataLoaders for train and validation splits.
+    Create PyTorch DataLoaders for train and validation splits using Byte-Level BPE.
     """
     try:
-        spacy_de, spacy_en = load_tokenizers()
+        if tokenizer_src is None or tokenizer_tgt is None:
+            tokenizer_src, tokenizer_tgt = load_tokenizers()
+
+        if vocab_src is None:
+            vocab_src = Vocab(tokenizer_src.get_vocab(), tokenizer_src.get_inverse_vocab())
+        if vocab_tgt is None:
+            vocab_tgt = Vocab(tokenizer_tgt.get_vocab(), tokenizer_tgt.get_inverse_vocab())
 
         train_dataset = Multi30kDataset(split="train")
         val_dataset = Multi30kDataset(split="validation")
 
-        collate = lambda b: collate_fn(b, vocab_src, vocab_tgt, spacy_de, spacy_en, max_padding, pad_id)
+        collate = lambda b: collate_fn(
+            b,
+            tokenizer_src=tokenizer_src,
+            tokenizer_tgt=tokenizer_tgt,
+            vocab_src=vocab_src,
+            vocab_tgt=vocab_tgt,
+            max_padding=max_padding,
+            pad_id=pad_id,
+        )
 
         train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate)
         val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate)

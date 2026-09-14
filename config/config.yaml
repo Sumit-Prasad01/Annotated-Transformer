@@ -1,5 +1,5 @@
 # Training schedule (Optimized for 4GB VRAM GPU e.g., RTX 3050)
-num_epochs: 8
+num_epochs: 10
 batch_size: 16
 accum_iter: 20
 base_lr: 1.0
@@ -17,6 +17,14 @@ label_smoothing: 0.1
 max_padding: 72
 vocab_min_freq: 2
 language_pair: ["de", "en"]
+
+# Tokenizer (Scratch Byte-Level BPE)
+tokenizer:
+  algorithm: "byte_level_bpe"
+  vocab_size: 8000
+  src_path: "outputs/bpe_de.json"
+  tgt_path: "outputs/bpe_en.json"
+  shared: false
 
 # Paths
 output_dir: outputs

@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -16,6 +17,7 @@ def evaluate_model(
     vocab_tgt,
     val_loss_compute,
     device: torch.device = None,
+    tokenizer_tgt=None,
     decoding: str = "greedy",
     max_len: int = 72,
     beam_size: int = 5,
@@ -70,6 +72,10 @@ def evaluate_model(
         hypotheses = []
         references = []
 
+        if tokenizer_tgt is None and os.path.exists("outputs/bpe_en.json"):
+            from src.data.bpe_tokenizer import ByteLevelBPETokenizer
+            tokenizer_tgt = ByteLevelBPETokenizer.load("outputs/bpe_en.json")
+
         special_tokens = {"<s>", "</s>", "<blank>", "<pad>", "<unk>"}
         itos_tgt = vocab_tgt.get_itos()
 
@@ -113,19 +119,23 @@ def evaluate_model(
                             end_symbol=end_symbol,
                         )
 
-                    # Extract hypothesis word tokens
-                    hyp_words = []
-                    for idx in out_tokens[0]:
-                        tok = itos_tgt.get(idx.item(), "")
-                        if tok not in special_tokens:
-                            hyp_words.append(tok)
-
-                    # Extract reference word tokens
-                    ref_words = []
-                    for idx in tgt_y_batch[b]:
-                        tok = itos_tgt.get(idx.item(), "")
-                        if tok not in special_tokens:
-                            ref_words.append(tok)
+                    # Extract hypothesis and reference words
+                    if tokenizer_tgt is not None and hasattr(tokenizer_tgt, "decode"):
+                        hyp_str = tokenizer_tgt.decode([idx.item() for idx in out_tokens[0]], skip_special_tokens=True).strip()
+                        ref_str = tokenizer_tgt.decode([idx.item() for idx in tgt_y_batch[b]], skip_special_tokens=True).strip()
+                        hyp_words = hyp_str.split()
+                        ref_words = ref_str.split()
+                    else:
+                        hyp_words = []
+                        for idx in out_tokens[0]:
+                            tok = itos_tgt.get(idx.item(), "")
+                            if tok not in special_tokens:
+                                hyp_words.append(tok)
+                        ref_words = []
+                        for idx in tgt_y_batch[b]:
+                            tok = itos_tgt.get(idx.item(), "")
+                            if tok not in special_tokens:
+                                ref_words.append(tok)
 
                     hypotheses.append(hyp_words)
                     references.append([ref_words])

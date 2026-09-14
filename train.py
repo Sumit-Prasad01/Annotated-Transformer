@@ -6,7 +6,7 @@ import mlflow.pytorch
 from utils.helper import read_yaml
 from utils.logger import logger
 from utils.custom_exception import CustomException
-from src.data import build_vocabulary, create_dataloaders, Vocab
+from src.data import build_vocabulary, create_dataloaders, load_tokenizers, Vocab
 from src.models import make_model
 from src.training import LabelSmoothing, SimpleLossCompute, get_std_opt, train_model
 
@@ -34,28 +34,32 @@ def main(config_path: str = "config/config.yaml"):
         os.makedirs(output_dir, exist_ok=True)
         vocab_path = config.get("vocab_path", os.path.join(output_dir, "vocab.pt"))
 
-        # Build or load vocabularies
-        if os.path.exists(vocab_path):
-            logger.info(f"Loading vocabulary from {vocab_path}...")
-            vocab_data = torch.load(vocab_path)
-            vocab_src = Vocab(vocab_data["src_stoi"], vocab_data["src_itos"])
-            vocab_tgt = Vocab(vocab_data["tgt_stoi"], vocab_data["tgt_itos"])
-        else:
-            logger.info("Building vocabulary from Multi30k dataset...")
-            vocab_src, vocab_tgt = build_vocabulary(min_freq=config.get("vocab_min_freq", 2))
-            torch.save(
-                {
-                    "src_stoi": vocab_src.get_stoi(),
-                    "src_itos": vocab_src.get_itos(),
-                    "tgt_stoi": vocab_tgt.get_stoi(),
-                    "tgt_itos": vocab_tgt.get_itos(),
-                },
-                vocab_path,
-            )
-            logger.info(f"Saved vocabulary to {vocab_path}")
+        # Load Byte-Level BPE Tokenizers
+        tok_cfg = config.get("tokenizer", {})
+        src_tok_path = tok_cfg.get("src_path", os.path.join(output_dir, "bpe_de.json"))
+        tgt_tok_path = tok_cfg.get("tgt_path", os.path.join(output_dir, "bpe_en.json"))
+        vocab_size = tok_cfg.get("vocab_size", 8000)
+
+        tok_de, tok_en = load_tokenizers(src_path=src_tok_path, tgt_path=tgt_tok_path, vocab_size=vocab_size)
+        vocab_src = Vocab(tok_de.get_vocab(), tok_de.get_inverse_vocab())
+        vocab_tgt = Vocab(tok_en.get_vocab(), tok_en.get_inverse_vocab())
+
+        # Save synchronized vocabulary mapping
+        torch.save(
+            {
+                "src_stoi": vocab_src.get_stoi(),
+                "src_itos": vocab_src.get_itos(),
+                "tgt_stoi": vocab_tgt.get_stoi(),
+                "tgt_itos": vocab_tgt.get_itos(),
+            },
+            vocab_path,
+        )
+        logger.info(f"Synchronized BPE vocabulary saved to {vocab_path} (Src: {len(vocab_src)}, Tgt: {len(vocab_tgt)})")
 
         # Create DataLoaders
         train_loader, val_loader = create_dataloaders(
+            tokenizer_src=tok_de,
+            tokenizer_tgt=tok_en,
             vocab_src=vocab_src,
             vocab_tgt=vocab_tgt,
             batch_size=config.get("batch_size", 16),
@@ -157,6 +161,10 @@ def main(config_path: str = "config/config.yaml"):
                     mlflow.log_artifact(config_path, artifact_path="config")
                 if os.path.exists(vocab_path):
                     mlflow.log_artifact(vocab_path, artifact_path="vocabulary")
+                if os.path.exists(src_tok_path):
+                    mlflow.log_artifact(src_tok_path, artifact_path="tokenizer")
+                if os.path.exists(tgt_tok_path):
+                    mlflow.log_artifact(tgt_tok_path, artifact_path="tokenizer")
                 if os.path.exists(checkpoint_path):
                     mlflow.log_artifact(checkpoint_path, artifact_path="checkpoints")
                     

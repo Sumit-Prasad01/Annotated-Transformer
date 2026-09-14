@@ -4,7 +4,7 @@ import torch
 from utils.helper import read_yaml
 from utils.logger import logger
 from utils.custom_exception import CustomException
-from src.data import Vocab
+from src.data import Vocab, load_tokenizers
 from src.models import make_model
 from src.inference import Translator
 
@@ -14,14 +14,13 @@ def predict(text: str, config_path: str = "config/config.yaml", checkpoint_path:
     try:
         config = read_yaml(config_path)
         output_dir = config.get("output_dir", "outputs")
-        vocab_path = config.get("vocab_path", os.path.join(output_dir, "vocab.pt"))
+        tok_cfg = config.get("tokenizer", {})
+        src_tok_path = tok_cfg.get("src_path", os.path.join(output_dir, "bpe_de.json"))
+        tgt_tok_path = tok_cfg.get("tgt_path", os.path.join(output_dir, "bpe_en.json"))
 
-        if not os.path.exists(vocab_path):
-            raise FileNotFoundError(f"Vocabulary file not found at {vocab_path}. Please train the model first.")
-
-        vocab_data = torch.load(vocab_path)
-        vocab_src = Vocab(vocab_data["src_stoi"], vocab_data["src_itos"])
-        vocab_tgt = Vocab(vocab_data["tgt_stoi"], vocab_data["tgt_itos"])
+        tok_de, tok_en = load_tokenizers(src_path=src_tok_path, tgt_path=tgt_tok_path)
+        vocab_src = Vocab(tok_de.get_vocab(), tok_de.get_inverse_vocab())
+        vocab_tgt = Vocab(tok_en.get_vocab(), tok_en.get_inverse_vocab())
 
         if checkpoint_path is None:
             checkpoint_path = os.path.join(output_dir, f"{config.get('checkpoint_prefix', 'model_')}best.pt")
@@ -46,6 +45,8 @@ def predict(text: str, config_path: str = "config/config.yaml", checkpoint_path:
             model=model,
             vocab_src=vocab_src,
             vocab_tgt=vocab_tgt,
+            tokenizer_src=tok_de,
+            tokenizer_tgt=tok_en,
             max_len=config.get("max_decode_len", 72),
             decoding=decoding,
             beam_size=beam_size,

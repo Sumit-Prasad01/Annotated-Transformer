@@ -1,6 +1,6 @@
 # 🤖 The Annotated Transformer — Modular PyTorch Implementation
 
-A modular, production-grade PyTorch implementation of **The Annotated Transformer** based on the seminal paper [*Attention Is All You Need* (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762). Refactored from the Harvard NLP annotated notebook into an extensible, config-driven Python package structure with custom utilities, gradient accumulation, GPU VRAM optimization, **Perplexity & BLEU Score Evaluation**, and **MLflow Experiment Tracking**.
+A modular, production-grade PyTorch implementation of **The Annotated Transformer** based on the seminal paper [*Attention Is All You Need* (Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762). Refactored from the Harvard NLP annotated notebook into an extensible, config-driven Python package structure with custom utilities, gradient accumulation, GPU VRAM optimization, **Custom Byte-Level BPE Tokenizer Built From Scratch**, **Perplexity & BLEU Score Evaluation**, and **MLflow Experiment Tracking**.
 
 ---
 
@@ -8,12 +8,19 @@ A modular, production-grade PyTorch implementation of **The Annotated Transforme
 
 ```mermaid
 graph TD
+    subgraph Tokenization["Scratch Byte-Level BPE Tokenizer"]
+        RawSrc["German Raw Sentence"] --> BPESrc["Source BPE Tokenizer (src/data/bpe_tokenizer.py)"]
+        BPESrc --> Src["Source Token IDs [<s>, ..., </s>]"]
+        RawTgt["English Raw Sentence"] --> BPETgt["Target BPE Tokenizer (src/data/bpe_tokenizer.py)"]
+        BPETgt --> Tgt["Target Token IDs [<s>, ..., </s>]"]
+    end
+
     subgraph Input_Processing["Input & Positional Encoding"]
-        Src["Source Tokens (German)"] --> SrcEmb["Embeddings * sqrt(d_model)"]
+        Src --> SrcEmb["Embeddings * sqrt(d_model)"]
         SrcEmb --> PosEnc1["Positional Encoding"]
         PosEnc1 --> EncInput["Encoder Input Vectors"]
 
-        Tgt["Target Tokens (English)"] --> TgtEmb["Embeddings * sqrt(d_model)"]
+        Tgt --> TgtEmb["Embeddings * sqrt(d_model)"]
         TgtEmb --> PosEnc2["Positional Encoding"]
         PosEnc2 --> DecInput["Decoder Input Vectors"]
     end
@@ -36,10 +43,12 @@ graph TD
         DecFFN --> DecAddNorm3["Add & LayerNorm"]
     end
 
-    subgraph Output_Head["Generation Head"]
+    subgraph Output_Head["Generation Head & Detokenization"]
         DecAddNorm3 --> GenLinear["Linear Projection Head (d_model -> Vocab)"]
         GenLinear --> LogSoftmax["Log Softmax"]
-        LogSoftmax --> TargetDist["Target Word Probabilities"]
+        LogSoftmax --> TargetDist["Greedy / Beam Search Decoding"]
+        TargetDist --> Detok["Target BPE Detokenizer (Lossless UTF-8 Decode)"]
+        Detok --> FinalEnglish["Natural English Translation"]
     end
 ```
 
@@ -113,13 +122,40 @@ $$\text{BLEU} = \text{BP} \cdot \exp\left( \sum_{n=1}^N w_n \log p_n \right)$$
 
 $$\text{where } \text{BP} = \begin{cases} 1 & \text{if } c > r \\ e^{(1 - r/c)} & \text{if } c \le r \end{cases}$$
 
-- $p_n$: Clipped $n$-gram precision
-- $w_n = \frac{1}{N}$: Uniform weight (typically $N=4$)
-- $\text{BP}$: Brevity Penalty ($c$ = candidate hypothesis length, $r$ = reference length)
+---
+
+## 🔤 3. Custom Scratch Byte-Level BPE Tokenizer
+
+Rather than relying on third-party black-box tokenizers (like Hugging Face `tokenizers` or Google `sentencepiece`), or language-dependent word tokenizers (like SpaCy), this project features a **pure-Python Byte-Level Byte Pair Encoding (BPE) Tokenizer built entirely from scratch** (`src/data/bpe_tokenizer.py`).
+
+### Key Architectural Features:
+1. **Reversible 256-Byte to Unicode Bijection (GPT-2 Style)**:
+   - Maps all 256 raw UTF-8 byte values (0–255) to unique printable Unicode characters.
+   - Any character in any language (including German umlauts `ä, ö, ü, ß, Ä, Ö, Ü`, numbers, and emojis) decomposes into base bytes.
+   - **Zero Out-of-Vocabulary (`<unk>`) Rate**: Guarantees that any string can be encoded and 100% losslessly reconstructed.
+2. **Pre-Tokenization Regex**:
+   - Uses the regex pattern `r"""'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""` to preserve whitespace and word boundaries before merging.
+3. **High-Performance Inverted-Index Trainer**:
+   - Maintains an inverted index (`pair_to_words: Dict[Tuple, Set[int]]`) during training.
+   - When the most frequent adjacent pair is merged, only the affected words are recalculated.
+   - Trains all 7,740 merges on the Multi30k dataset (~29,000 sentences) in **~6 seconds** in pure Python.
+4. **Special Tokens**:
+   - Fully standardized: `<unk>=0`, `<blank>=1`, `<s>=2`, `</s>=3`.
+5. **Lossless Detokenization**:
+   - Subwords are seamlessly merged back into natural English sentences during inference and evaluation, eliminating subword artifacts (e.g. `@@`, `##`, or artificial whitespace).
+
+### Tokenizer Training Command:
+```bash
+# Train German and English BPE tokenizers (default vocab size: 8000)
+python train_tokenizer.py --vocab_size 8000 --output_dir outputs
+
+# Optionally train a single shared multilingual tokenizer
+python train_tokenizer.py --vocab_size 8000 --output_dir outputs --shared
+```
 
 ---
 
-## ⚡ 3. Hardware & VRAM Optimization for RTX 3050 (4GB VRAM)
+## ⚡ 4. Hardware & VRAM Optimization for RTX 3050 (4GB VRAM)
 
 Training Transformer models can quickly exceed GPU VRAM limits. This project includes tailored optimizations to train efficiently on **NVIDIA RTX 3050 (4GB VRAM)** GPUs without running into `CUDA Out-Of-Memory (OOM)` errors.
 
@@ -138,12 +174,11 @@ Training Transformer models can quickly exceed GPU VRAM limits. This project inc
 1. **Micro-Batching (`batch_size=16`)**: Reduces peak activation tensor memory from `2.1 GB` to `0.9 GB`.
 2. **Gradient Accumulation (`accum_iter=20`)**: Accumulates gradients across 20 micro-batches before executing optimizer step:
    $$\text{Effective Batch Size} = \text{batch size} \times \text{accum iter} = 16 \times 20 = 320$$
-   *This maintains the exact same optimization stability as the original paper while running in < 2.5 GB VRAM.*
 3. **Causal & Padding Masking**: Memory-efficient lower triangular causal masks (`subsequent_mask`) generated dynamically per batch.
 
 ---
 
-## 📊 4. MLflow Experiment Tracking & Metric Logging
+## 📊 5. MLflow Experiment Tracking & Metric Logging
 
 Integrated experiment tracking via **MLflow** automatically records parameters, loss metrics, perplexity, BLEU scores, learning rate schedules, and model artifacts per training run using an SQLite database backend (`sqlite:///mlflow.db`).
 
@@ -151,7 +186,7 @@ Integrated experiment tracking via **MLflow** automatically records parameters, 
 - **Hyperparameters (`mlflow.log_params`)**: `num_epochs`, `batch_size`, `accum_iter`, `base_lr`, `warmup`, `d_model`, `d_ff`, `num_layers`, `num_heads`, `dropout`, `label_smoothing`, `src_vocab_size`, `tgt_vocab_size`, `total_parameters`, `device`, `seed`.
 - **Per-Epoch Metrics (`mlflow.log_metric`)**: `train_loss`, `val_loss`, `val_perplexity`, `learning_rate` per epoch.
 - **Evaluation Metrics**: `eval_val_loss`, `eval_perplexity`, `eval_bleu_score`.
-- **Artifacts (`mlflow.log_artifact`)**: Saved model checkpoints (`.pt`), vocabulary dictionary (`vocab.pt`), and run config file (`config.yaml`).
+- **Artifacts (`mlflow.log_artifact`)**: Saved model checkpoints (`.pt`), BPE tokenizer states (`bpe_de.json`, `bpe_en.json`), vocabulary mapping (`vocab.pt`), and run configuration (`config.yaml`).
 
 ### Viewing MLflow Dashboard
 Launch the local MLflow web UI server to inspect runs, metric curves, and parameter comparisons:
@@ -162,17 +197,21 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 ---
 
-## 📂 5. Project Directory Structure
+## 📂 6. Project Directory Structure
 
 ```
 Annotated-Transformer/
 ├── config/
-│   └── config.yaml                 # Central hyperparameter & MLflow configuration
+│   └── config.yaml                 # Central hyperparameter, BPE tokenizer & MLflow config
 ├── notebooks/
 │   └── AnnotatedTransformer.ipynb  # Original reference research notebook
+├── outputs/
+│   ├── bpe_de.json                 # Trained German scratch Byte-Level BPE tokenizer
+│   ├── bpe_en.json                 # Trained English scratch Byte-Level BPE tokenizer
+│   └── vocab.pt                    # Synchronized vocabulary mapping
 ├── src/
 │   ├── __init__.py
-│   ├── models/                     # Transformer Model Components
+│   ├── models/                     # Transformer Model Architecture Components
 │   │   ├── __init__.py
 │   │   ├── attention.py            # MultiHeadedAttention & Scaled Dot-Product Attention
 │   │   ├── layers.py               # EncoderLayer, DecoderLayer, SublayerConnection, LayerNorm, FeedForward
@@ -181,10 +220,11 @@ Annotated-Transformer/
 │   │   └── build_model.py          # make_model factory & Xavier parameter initialization
 │   ├── data/                       # Dataset & Tokenization Pipeline
 │   │   ├── __init__.py
+│   │   ├── bpe_tokenizer.py        # Pure-Python Scratch Byte-Level BPE Tokenizer Engine
+│   │   ├── tokenizer.py            # Tokenizer loading & adapter utilities
+│   │   ├── vocab.py                # Vocab abstraction deriving from BPE tokenizers
 │   │   ├── batch.py                # Batch wrapper & causal subsequent_mask
-│   │   ├── tokenizer.py            # SpaCy German/English tokenization pipelines
-│   │   ├── vocab.py                # Vocab class, dictionary builder & serialization (.pt)
-│   │   └── dataset.py              # Multi30kDataset, collate_fn & synthetic data_gen
+│   │   └── dataset.py              # Multi30kDataset, BPE collate_fn & synthetic data_gen
 │   ├── training/                   # Loss, Schedulers & Trainer Engine
 │   │   ├── __init__.py
 │   │   ├── loss.py                 # LabelSmoothing loss & SimpleLossCompute
@@ -192,7 +232,7 @@ Annotated-Transformer/
 │   │   └── trainer.py              # TrainState, run_epoch & train_model loop with MLflow
 │   ├── inference/                  # Generation & Decoding Algorithms
 │   │   ├── __init__.py
-│   │   └── generator.py            # greedy_decode, beam_search_decode & Translator
+│   │   └── generator.py            # greedy_decode, beam_search_decode & BPE Translator
 │   ├── evaluation/                 # Metrics & Model Evaluator Engine
 │   │   ├── __init__.py
 │   │   ├── metrics.py              # calculate_perplexity & calculate_bleu (SacreBLEU/NLTK/Fallback)
@@ -200,24 +240,26 @@ Annotated-Transformer/
 │   └── visualization/              # Diagnostic Heatmaps
 │       ├── __init__.py
 │       └── attention_viz.py        # Altair attention map DataFrames & visualizations
+├── tests/
+│   └── test_bpe_tokenizer.py       # Unit tests for Scratch Byte-Level BPE Tokenizer
 ├── utils/
 │   ├── __init__.py
 │   ├── custom_exception.py         # Detailed traceback exception handler
 │   ├── helper.py                   # YAML reader & file utilities
 │   └── logger.py                   # Centralized logging module
+├── train_tokenizer.py              # CLI entry point to train scratch Byte-Level BPE tokenizers
 ├── train.py                        # Training pipeline entry point (MLflow enabled)
 ├── evaluate.py                     # Validation evaluation entry point (Loss, PPL, BLEU)
 ├── predict.py                      # Translation CLI entry point (Greedy / Beam Search)
-├── modular_implementation_plan.md  # Refactoring blueprint document
 ├── requirements.txt                # Package dependencies
 └── setup.py                        # Package installation manifest
 ```
 
 ---
 
-## 🚀 6. Quickstart & Usage
+## 🚀 7. Quickstart & Usage
 
-### 6.1 Environment Setup
+### 7.1 Environment Setup
 Clone the repository and install requirements:
 ```bash
 git clone https://github.com/Sumit-Prasad01/Annotated-Transformer.git
@@ -226,13 +268,19 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Download SpaCy tokenization language models:
+Run unit tests to verify the scratch Byte-Level BPE tokenizer:
 ```bash
-python -m spacy download de_core_news_sm
-python -m spacy download en_core_web_sm
+python -m unittest tests/test_bpe_tokenizer.py
 ```
 
-### 6.2 Model Training
+### 7.2 Train Byte-Level BPE Tokenizers
+Train source (German) and target (English) tokenizers on Multi30k:
+```bash
+python train_tokenizer.py --vocab_size 8000 --output_dir outputs
+```
+*(If omitted, `train.py` will automatically detect missing tokenizers and train them on launch).*
+
+### 7.3 Model Training
 Run end-to-end model training with automatic device detection and MLflow tracking:
 ```bash
 python train.py --config config/config.yaml
@@ -240,7 +288,7 @@ python train.py --config config/config.yaml
 
 *Training logs are stored in `logs/`, MLflow runs in `mlflow.db`, and best model checkpoints are saved to `outputs/multi30k_model_best.pt`.*
 
-### 6.3 Model Evaluation (Loss, Perplexity & BLEU Score)
+### 7.4 Model Evaluation (Loss, Perplexity & BLEU Score)
 Evaluate validation loss, perplexity, and BLEU score on the Multi30k test dataset:
 
 ```bash
@@ -254,34 +302,8 @@ python evaluate.py --config config/config.yaml --beam --beam_size 8
 python evaluate.py --config config/config.yaml --max_samples 100
 ```
 
-#### Benchmark Evaluation Results:
-
-##### 1. Beam Search Decoding (`beam_size=8`)
-```text
-==================================================
-         MODEL EVALUATION RESULTS         
-==================================================
-  Validation Loss : 1.4330
-  Perplexity (PPL): 4.1912
-  BLEU Score      : 39.58
-  Decoding Strategy: beam (beam_size=8)
-==================================================
-```
-
-##### 2. Greedy Search Decoding
-```text
-==================================================
-         MODEL EVALUATION RESULTS         
-==================================================
-  Validation Loss : 1.4330
-  Perplexity (PPL): 4.1912
-  BLEU Score      : 38.45
-  Decoding Strategy: greedy
-==================================================
-```
-
-### 6.4 Run Translation Inference (German $\to$ English)
-Translate German sentences from the command line:
+### 7.5 Run Translation Inference (German $\to$ English)
+Translate German sentences from the command line with automatic BPE encoding and subword detokenization:
 
 ```bash
 # Greedy decoding (Fast, Default)
@@ -296,7 +318,7 @@ python predict.py --text "Eine Frau kocht ein Gericht in der Küche." --config c
 
 ---
 
-## ⚙️ 7. Configuration Reference (`config/config.yaml`)
+## ⚙️ 8. Configuration Reference (`config/config.yaml`)
 
 ```yaml
 # Training schedule (Optimized for 4GB VRAM GPU e.g., RTX 3050)
@@ -318,6 +340,14 @@ label_smoothing: 0.1
 max_padding: 72
 vocab_min_freq: 2
 language_pair: ["de", "en"]
+
+# Tokenizer (Scratch Byte-Level BPE)
+tokenizer:
+  algorithm: "byte_level_bpe"
+  vocab_size: 8000
+  src_path: "outputs/bpe_de.json"
+  tgt_path: "outputs/bpe_en.json"
+  shared: false
 
 # Paths
 output_dir: outputs
@@ -348,7 +378,8 @@ mlflow:
 
 ---
 
-## 📜 8. Citation & Acknowledgments
+## 📜 9. Citation & Acknowledgments
 
 - **Original Paper**: Vaswani et al., *"Attention Is All You Need"*, NeurIPS 2017. [arXiv:1706.03762](https://arxiv.org/abs/1706.03762)
+- **Subword NMT Paper**: Rico Sennrich et al., *"Neural Machine Translation of Rare Words with Subword Units"*, ACL 2016. [arXiv:1508.07909](https://arxiv.org/abs/1508.07909)
 - **Harvard NLP**: Sasha Rush et al., *The Annotated Transformer*, [Harvard NLP Blog](https://nlp.seas.harvard.edu/2018/04/03/attention.html).

@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from src.data.batch import subsequent_mask
+from src.data.bpe_tokenizer import ByteLevelBPETokenizer
 from src.data.tokenizer import load_tokenizers, tokenize
 from src.data.vocab import Vocab
 from utils.logger import logger
@@ -116,28 +117,34 @@ def beam_search_decode(model: torch.nn.Module, src: torch.Tensor, src_mask: torc
 
 class Translator:
     """
-    High-level string-to-string translation pipeline using trained Transformer model.
+    High-level string-to-string translation pipeline using trained Transformer model
+    and scratch Byte-Level BPE tokenizers.
     """
 
-    def __init__(self, model: torch.nn.Module, vocab_src: Vocab, vocab_tgt: Vocab,
+    def __init__(self, model: torch.nn.Module, vocab_src: Vocab = None, vocab_tgt: Vocab = None,
+                 tokenizer_src: ByteLevelBPETokenizer = None, tokenizer_tgt: ByteLevelBPETokenizer = None,
                  max_len: int = 72, device: torch.device = None,
                  decoding: str = "greedy", beam_size: int = 5):
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
-        self.vocab_src = vocab_src
-        self.vocab_tgt = vocab_tgt
+        self.tokenizer_src = tokenizer_src
+        self.tokenizer_tgt = tokenizer_tgt
+        if self.tokenizer_src is None or self.tokenizer_tgt is None:
+            self.tokenizer_src, self.tokenizer_tgt = load_tokenizers()
+
+        self.vocab_src = vocab_src if vocab_src is not None else Vocab(self.tokenizer_src.get_vocab(), self.tokenizer_src.get_inverse_vocab())
+        self.vocab_tgt = vocab_tgt if vocab_tgt is not None else Vocab(self.tokenizer_tgt.get_vocab(), self.tokenizer_tgt.get_inverse_vocab())
         self.max_len = max_len
         self.decoding = decoding  # "greedy" or "beam"
         self.beam_size = beam_size
-        self.spacy_de, _ = load_tokenizers()
         self.model.eval()
 
     def translate(self, text: str) -> str:
         """
-        Translate an input German text string into English.
+        Translate an input German text string into English using Byte-Level BPE.
         """
         try:
-            tokens = [self.vocab_src["<s>"]] + [self.vocab_src[t] for t in tokenize(text, self.spacy_de)] + [self.vocab_src["</s>"]]
+            tokens = self.tokenizer_src.encode(text, add_special_tokens=True)
             src = torch.tensor(tokens, dtype=torch.long).unsqueeze(0).to(self.device)
             src_mask = (src != self.vocab_src["<blank>"]).unsqueeze(-2).to(self.device)
 
@@ -156,15 +163,9 @@ class Translator:
                         end_symbol=self.vocab_tgt["</s>"],
                     )
 
-            itos = self.vocab_tgt.get_itos()
-            translated_words = []
-            for idx in out_tokens[0]:
-                token_str = itos.get(idx.item(), "")
-                if token_str in ["<s>", "</s>", "<blank>"]:
-                    continue
-                translated_words.append(token_str)
-
-            return " ".join(translated_words)
+            # Decode target token IDs into natural English text
+            token_ids = [idx.item() for idx in out_tokens[0]]
+            return self.tokenizer_tgt.decode(token_ids, skip_special_tokens=True).strip()
         except Exception as e:
             logger.error(f"Error translating sentence '{text}'.")
             raise CustomException(f"Failed to translate sentence '{text}'", e)

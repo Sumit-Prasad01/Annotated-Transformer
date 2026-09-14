@@ -4,7 +4,7 @@ pandas
 matplotlib
 seaborn
 altair
-spacy
+regex
 datasets
 pyyaml
 gputil

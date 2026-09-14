@@ -5,7 +5,7 @@ import mlflow
 from utils.helper import read_yaml
 from utils.logger import logger
 from utils.custom_exception import CustomException
-from src.data import create_dataloaders, Vocab
+from src.data import create_dataloaders, load_tokenizers, Vocab
 from src.models import make_model
 from src.training import LabelSmoothing, SimpleLossCompute
 from src.evaluation import evaluate_model
@@ -21,14 +21,13 @@ def evaluate(
     try:
         config = read_yaml(config_path)
         output_dir = config.get("output_dir", "outputs")
-        vocab_path = config.get("vocab_path", os.path.join(output_dir, "vocab.pt"))
+        tok_cfg = config.get("tokenizer", {})
+        src_tok_path = tok_cfg.get("src_path", os.path.join(output_dir, "bpe_de.json"))
+        tgt_tok_path = tok_cfg.get("tgt_path", os.path.join(output_dir, "bpe_en.json"))
 
-        if not os.path.exists(vocab_path):
-            raise FileNotFoundError(f"Vocabulary file not found at {vocab_path}. Please train the model first.")
-
-        vocab_data = torch.load(vocab_path)
-        vocab_src = Vocab(vocab_data["src_stoi"], vocab_data["src_itos"])
-        vocab_tgt = Vocab(vocab_data["tgt_stoi"], vocab_data["tgt_itos"])
+        tok_de, tok_en = load_tokenizers(src_path=src_tok_path, tgt_path=tgt_tok_path)
+        vocab_src = Vocab(tok_de.get_vocab(), tok_de.get_inverse_vocab())
+        vocab_tgt = Vocab(tok_en.get_vocab(), tok_en.get_inverse_vocab())
 
         if checkpoint_path is None:
             checkpoint_path = os.path.join(output_dir, f"{config.get('checkpoint_prefix', 'model_')}best.pt")
@@ -63,6 +62,8 @@ def evaluate(
 
         # Create Validation DataLoader
         _, val_loader = create_dataloaders(
+            tokenizer_src=tok_de,
+            tokenizer_tgt=tok_en,
             vocab_src=vocab_src,
             vocab_tgt=vocab_tgt,
             batch_size=config.get("batch_size", 32),
@@ -92,6 +93,7 @@ def evaluate(
             vocab_tgt=vocab_tgt,
             val_loss_compute=val_loss_compute,
             device=device,
+            tokenizer_tgt=tok_en,
             decoding=eval_decoding,
             max_len=max_decode_len,
             beam_size=eval_beam_size,

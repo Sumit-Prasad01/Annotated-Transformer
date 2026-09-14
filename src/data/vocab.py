@@ -1,8 +1,7 @@
 import os
 import torch
-from collections import Counter
-from datasets import load_dataset
-from src.data.tokenizer import load_tokenizers, tokenize
+from typing import Optional, Dict
+from src.data.tokenizer import load_tokenizers
 from utils.logger import logger
 from utils.custom_exception import CustomException
 
@@ -10,9 +9,12 @@ from utils.custom_exception import CustomException
 class Vocab:
     """
     Vocabulary class for managing token-to-ID (stoi) and ID-to-token (itos) mappings.
+    Compatible with Byte-Level BPE tokenizers and checkpoint serialization.
     """
 
-    def __init__(self, token_to_id=None, id_to_token=None, unk_token="<unk>"):
+    def __init__(self, token_to_id: Optional[Dict[str, int]] = None, 
+                 id_to_token: Optional[Dict[int, str]] = None, 
+                 unk_token: str = "<unk>"):
         self.stoi = token_to_id if token_to_id is not None else {}
         self.itos = id_to_token if id_to_token is not None else {}
         self.unk_token = unk_token
@@ -58,50 +60,29 @@ class Vocab:
             raise CustomException(f"Failed to load vocabulary from {filepath}", e)
 
 
-def build_vocabulary(min_freq: int = 2, dataset_name: str = "bentrevett/multi30k"):
+def build_vocabulary(
+    src_tokenizer_path: str = "outputs/bpe_de.json",
+    tgt_tokenizer_path: str = "outputs/bpe_en.json",
+    vocab_size: int = 8000,
+    min_freq: int = 2,
+    dataset_name: str = "bentrevett/multi30k",
+):
     """
-    Build source (German) and target (English) vocabularies from dataset.
-    Special tokens: <unk>=0, pad (<blank>)=1, <s>=2, </s>=3
+    Build source (German) and target (English) vocabularies from trained Byte-Level BPE tokenizers.
+    Special tokens: <unk>=0, pad (<blank>)=1, <s>=2, </s>=3.
     """
     try:
-        spacy_de, spacy_en = load_tokenizers()
-        
-        def tokenize_de(text):
-            return tokenize(text, spacy_de)
+        tok_de, tok_en = load_tokenizers(
+            src_path=src_tokenizer_path,
+            tgt_path=tgt_tokenizer_path,
+            vocab_size=vocab_size,
+        )
 
-        def tokenize_en(text):
-            return tokenize(text, spacy_en)
+        vocab_src = Vocab(tok_de.get_vocab(), tok_de.get_inverse_vocab())
+        vocab_tgt = Vocab(tok_en.get_vocab(), tok_en.get_inverse_vocab())
 
-        logger.info(f"Building vocabularies from dataset {dataset_name}...")
-        dataset = load_dataset(dataset_name)
-        
-        counter_de = Counter()
-        counter_en = Counter()
-
-        for example in dataset["train"]:
-            counter_de.update(tokenize_de(example["de"]))
-            counter_en.update(tokenize_en(example["en"]))
-
-        specials = ["<unk>", "<blank>", "<s>", "</s>"]
-
-        def make_vocab_dict(counter, min_freq):
-            stoi = {tok: idx for idx, tok in enumerate(specials)}
-            idx = len(specials)
-            for tok, freq in counter.items():
-                if freq >= min_freq and tok not in stoi:
-                    stoi[tok] = idx
-                    idx += 1
-            itos = {idx: tok for tok, idx in stoi.items()}
-            return stoi, itos
-
-        de_stoi, de_itos = make_vocab_dict(counter_de, min_freq)
-        en_stoi, en_itos = make_vocab_dict(counter_en, min_freq)
-
-        vocab_src = Vocab(de_stoi, de_itos)
-        vocab_tgt = Vocab(en_stoi, en_itos)
-
-        logger.info(f"Vocabularies built successfully. Src size: {len(vocab_src)}, Tgt size: {len(vocab_tgt)}")
+        logger.info(f"Vocabularies built from BPE tokenizers. Src size: {len(vocab_src)}, Tgt size: {len(vocab_tgt)}")
         return vocab_src, vocab_tgt
     except Exception as e:
-        logger.error("Error building vocabulary.")
+        logger.error("Error building vocabulary from BPE tokenizers.")
         raise CustomException("Failed to build vocabulary", e)
